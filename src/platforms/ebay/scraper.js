@@ -1,9 +1,13 @@
+// File: src/platforms/ebay/scraper.js
+
 const cheerio = require('cheerio');
 const BrowserService = require('../../core/browser');
 const Utils = require('../../core/utils');
 const config = require('./config');
 
 class EbayScraper {
+
+    // METHOD INSTANCE: Mengambil link produk dari halaman pencarian
     async scrapeProducts(searchQuery, page = 1) {
         let pageInstance = null;
         try {
@@ -22,40 +26,29 @@ class EbayScraper {
                 timeout: config.TIMEOUTS.NAVIGATION 
             });
 
-            console.log(`⏳ Menunggu JavaScript eBay mengisi rak buku dengan PRODUK... (up to 30s)`);
-            
+            console.log(`⏳ Menunggu produk...`);
             try {
-                // ✅ PERBAIKI: Tunggu produk dengan berbagai format
                 await pageInstance.waitForFunction(
                     () => {
                         const selectors = ['li.s-item', 'li.s-card', '.s-item__wrapper'];
                         for (const selector of selectors) {
-                            if (document.querySelector(selector)) {
-                                return true;
-                            }
+                            if (document.querySelector(selector)) return true;
                         }
                         return false;
                     },
                     { timeout: config.TIMEOUTS.WAIT_FOR_FUNCTION }
                 );
-                console.log(`✅ SUKSES: JavaScript selesai! Rak buku sudah terisi produk.`);
+                console.log(`✅ SUKSES: Produk ditemukan.`);
             } catch (e) {
                 console.error(`❌ GAGAL Menunggu (waitForFunction): ${e.message}`);
                 await Utils.saveScreenshot(pageInstance, 'ebay_TIMING_FAILURE_screenshot.png');
-                const htmlContent = await pageInstance.content();
-                await Utils.saveDebugHTML(htmlContent, 'ebay_TIMING_FAILURE_debug.html');
                 throw new Error('Gagal menunggu JavaScript eBay mengisi produk.');
             }
 
-            console.log('Extracting HTML...');
             const html = await pageInstance.content();
-            await Utils.saveDebugHTML(html, 'ebay_stealth_debug.html');
-            console.log('✅ Stealth HTML saved to ebay_stealth_debug.html');
-
-            // ✅ PERBAIKI: Gunakan fungsi extract yang baru
             const products = this.extractProductsFromHTML(html);
             
-            console.log(`✅ Found ${products.length} products (Data Bersih)`);
+            console.log(`✅ Found ${products.length} product links`);
             return products;
             
         } catch (error) {
@@ -68,97 +61,70 @@ class EbayScraper {
         }
     }
 
-    // ✅ PERBAIKI: Fungsi extract yang lebih comprehensive
+    // HELPER: Ekstraksi Link (Dipanggil via this.extractProductsFromHTML)
     extractProductsFromHTML(html) {
         const $ = cheerio.load(html);
         const products = [];
-        
-        // ✅ PERBAIKI: Gunakan semua selectors dari config
         const productSelectors = config.SELECTORS.PRODUCT_LIST.split(', ');
-        
-        console.log(`🔄 Using selectors: ${productSelectors.join(', ')}`);
         
         productSelectors.forEach(selector => {
             const elements = $(selector);
-            console.log(`🔍 Selector "${selector}" found ${elements.length} items`);
-            
             elements.each((index, element) => {
-                try {
-                    const $element = $(element);
-                    
-                    // ✅ FLEXIBLE: Coba semua selector untuk title
-                    let title = this.extractText($element, config.SELECTORS.PRODUCT_TITLE);
-                    
-                    // ✅ FLEXIBLE: Coba semua selector untuk price
-                    let price = this.extractText($element, config.SELECTORS.PRODUCT_PRICE);
-                    
-                    // ✅ FLEXIBLE: Coba semua selector untuk link
-                    let link = this.extractAttribute($element, config.SELECTORS.PRODUCT_LINK, 'href');
-                    
-                    // ✅ FLEXIBLE: Coba semua selector untuk image
-                    let image = this.extractAttribute($element, config.SELECTORS.PRODUCT_IMAGE, 'src');
+                const $element = $(element);
+                let title = this.extractText($element, config.SELECTORS.PRODUCT_TITLE);
+                let link = this.extractAttribute($element, config.SELECTORS.PRODUCT_LINK, 'href');
 
-                    title = Utils.cleanProductTitle(title);
-                    
-                    // Validasi product - lebih longgar
-                    if (!title || title.length < 3 || title.toLowerCase().includes('shop on ebay') ||!link || !link.includes('/itm/') || link.includes('/sch/i.html')) 
-                    {
-                        return; 
-                    }
+                title = Utils.cleanProductTitle(title);
+                
+                // FILTER JUNK LINKS
+                if (!title || title.length < 3 || title.toLowerCase().includes('shop on ebay') ||
+                    !link || !link.includes('/itm/') || link.includes('/sch/i.html')) 
+                {
+                    return; 
+                }
 
-                    // Cek duplikat
-                    const isDuplicate = products.some(p => p.product_url === link);
-                    if (!isDuplicate) {
-                        products.push({
-                            product_name: title,
-                            product_price: price || '-',
-                            product_url: link,
-                            product_image: image || config.DEFAULT_IMAGE
-                        });
-                    }
-                    
-                } catch (err) {
-                    console.warn(`Skipping malformed item: ${err.message}`);
+                const isDuplicate = products.some(p => p.product_url === link);
+                if (!isDuplicate) {
+                    products.push({
+                        product_url: link,
+                    });
                 }
             });
         });
-
-        console.log(`📊 Total unique products found: ${products.length}`);
         return products;
     }
 
-    // ✅ HELPER: Extract text dengan multiple selectors
+    // METHOD: Helper untuk extract text (Diperlukan oleh extractProductsFromHTML)
     extractText($element, selectorString) {
         const selectors = selectorString.split(', ');
         for (const selector of selectors) {
             const text = $element.find(selector).first().text().trim();
-            if (text && text.length > 0) {
-                return text;
-            }
+            if (text && text.length > 0) return text;
         }
         return '';
     }
 
-    // ✅ HELPER: Extract attribute dengan multiple selectors
+    // METHOD: Helper untuk extract attribute (Diperlukan oleh extractProductsFromHTML)
     extractAttribute($element, selectorString, attribute) {
         const selectors = selectorString.split(', ');
         for (const selector of selectors) {
             const attrValue = $element.find(selector).first().attr(attribute);
-            if (attrValue) {
-                return attrValue;
-            }
+            if (attrValue) return attrValue;
         }
         return '';
     }
 
-    async scrapeProductDetails(productUrl) {
+    // -----------------------------------------------------------------
+    // FUNGSI UTAMA AI: Mengambil Teks Mentah dari halaman detail
+    // -----------------------------------------------------------------
+    async getProductDetailText(productUrl) {
         let pageInstance = null;
         try {
             if (!productUrl || productUrl === '-' || !productUrl.includes('/itm/')) {
-                return { product_description: '-', item_specifics: {} };
+                return { text: "Teks tidak tersedia - URL tidak valid", imageUrl: '-' };
             }
 
-            console.log(`[Mode Stealth] 🔍 Scraping product details...`);
+            console.log(`[Mode AI] Navigasi ke halaman produk...`);
             
             const browser = await BrowserService.getBrowser();
             pageInstance = await browser.newPage();
@@ -166,158 +132,88 @@ class EbayScraper {
             await pageInstance.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
             await pageInstance.setViewport({ width: 1366, height: 768 });
             
-            console.log(`🔗 Navigating to product details...`);
+            // BLOKIR ASET AGAR LEBIH CEPAT (Mode AI)
+            await pageInstance.setRequestInterception(true);
+            pageInstance.on('request', (req) => {
+                if (['image', 'font', 'stylesheet', 'media'].includes(req.resourceType())) {
+                    req.abort();
+                } else {
+                    req.continue();
+                }
+            });
+
             await pageInstance.goto(productUrl, { 
-                waitUntil: 'networkidle2',
+                waitUntil: 'domcontentloaded',
                 timeout: config.TIMEOUTS.NAVIGATION
             });
 
-            console.log(`🖱️ Simulating human scroll...`);
+            // Scroll untuk memicu lazy load (jika ada)
             await pageInstance.evaluate(async () => {
-                for (let i = 0; i < document.body.scrollHeight / 4; i += 100) {
-                    window.scrollBy(0, 100);
-                    await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 50));
-                }
+                window.scrollBy(0, 500);
             });
+            await new Promise(resolve => setTimeout(resolve, 500)); 
 
-            console.log(`⏳ Waiting for content to load...`);
-            
-            let description = '-';
-            const specifics = {};
+            const html = await pageInstance.content();
+            const $ = cheerio.load(html);
 
-            // STRATEGI 1: AMBIL DESKRIPSI DARI IFRAME
+            // HYBRID FIX: Ekstrak URL gambar utama
+            let imageUrl = '';
+            const mainImageSelectors = [
+                'img.ux-image-grid-item__image', 'img.x-img-fallback', 'img[data-test-id="main-image"]', '.ux-image-grid-item img'
+            ];
+            for (const selector of mainImageSelectors) {
+                const imgElement = $(selector).first();
+                if (imgElement.length) {
+                    imageUrl = imgElement.attr('src') || imgElement.attr('data-src');
+                    if (imageUrl) break;
+                }
+            }
+            if (!imageUrl) {
+                const galleryImage = $('img.x-gallery__img').first();
+                if (galleryImage.length) {
+                    imageUrl = galleryImage.attr('src') || galleryImage.attr('data-src');
+                }
+            }
+
+            // Ambil teks dari iframe deskripsi
+            let iframeDescriptionText = '';
             try {
-                console.log(`🔄 Strategy 1: Accessing description iframe...`);
-                await pageInstance.waitForSelector(config.SELECTORS.DESCRIPTION_IFRAME, { 
-                    timeout: config.TIMEOUTS.WAIT_FOR_SELECTOR 
-                });
-                
-                const iframeElement = await pageInstance.$(config.SELECTORS.DESCRIPTION_IFRAME);
-                const frame = await iframeElement.contentFrame();
-                
-                if (frame) {
-                    await frame.waitForSelector('body', { 
-                        timeout: config.TIMEOUTS.WAIT_FOR_SELECTOR 
-                    });
-                    
-                    const iframeDescription = await frame.evaluate(() => {
-                        return document.body.innerText.trim();
-                    });
-                    
-                    if (iframeDescription && iframeDescription.length > 20) {
-                        description = iframeDescription;
-                        console.log(`✅ Description from iframe: ${description.length} chars`);
+                const iframeElement = await pageInstance.$('#desc_ifr'); 
+                if (iframeElement) {
+                    const frame = await iframeElement.contentFrame();
+                    if (frame) {
+                        await frame.evaluate(() => { window.scrollBy(0, 500); });
+                        iframeDescriptionText = await frame.evaluate(() => document.body.innerText.trim());
                     }
                 }
-            } catch (e) {
-                console.log(`❌ Iframe strategy failed: ${e.message}`);
-            }
+            } catch (e) {}
 
-            // STRATEGI 2: AMBIL DESKRIPSI DARI HTML LANGSUNG
-            if (description === '-' || description.length < 50) {
-                try {
-                    console.log(`🔄 Strategy 2: Direct HTML scraping...`);
-                    const html = await pageInstance.content();
-                    const $ = cheerio.load(html);
-                    
-                    const descSelectors = config.SELECTORS.DESCRIPTION_CONTENT.split(', ');
-                    for (const selector of descSelectors) {
-                        const text = $(selector).text().trim();
-                        if (text && text.length > 50) {
-                            description = text;
-                            console.log(`✅ Description from selector ${selector}: ${description.length} chars`);
-                            break;
-                        }
-                    }
-                } catch (e) {
-                    console.log(`❌ HTML strategy failed: ${e.message}`);
-                }
-            }
-
-            // STRATEGI 3: AMBIL ITEM SPECIFICS
-            try {
-                console.log(`🔄 Extracting item specifics...`);
-                const html = await pageInstance.content();
-                const $ = cheerio.load(html);
-                
-                // Modern layout
-                $('.ux-labels-values__labels').each((index, element) => {
-                    try {
-                        const labelElement = $(element);
-                        const valueElement = labelElement.next('.ux-labels-values__values');
-                        
-                        if (labelElement && valueElement) {
-                            const label = labelElement.text().trim().replace(':', '');
-                            const value = valueElement.text().trim();
-                            
-                            if (label && value && label.length < 50) {
-                                specifics[label] = value;
-                            }
-                        }
-                    } catch (e) {}
-                });
-                
-                // Traditional layout
-                if (Object.keys(specifics).length === 0) {
-                    $('.ux-layout-section.e-app--rich .ux-labels-values__row').each((index, element) => {
-                        try {
-                            const label = $(element).find('.ux-labels-values__labels .ux-textspans').text().trim();
-                            const value = $(element).find('.ux-labels-values__values .ux-textspans').text().trim();
-                            
-                            if (label && value) {
-                                specifics[label] = value;
-                            }
-                        } catch (e) {}
-                    });
-                }
-                
-                console.log(`✅ Item specifics found: ${Object.keys(specifics).length}`);
-            } catch (e) {
-                console.log(`❌ Item specifics extraction failed: ${e.message}`);
-            }
-
-            // STRATEGI 4: FALLBACK - META DESCRIPTION
-            if (description === '-' || description.length < 30) {
-                try {
-                    console.log(`🔄 Strategy 4: Meta description fallback...`);
-                    const html = await pageInstance.content();
-                    const $ = cheerio.load(html);
-                    
-                    description = $('meta[name="description"]').attr('content') || '-';
-                    console.log(`✅ Meta description: ${description.length} chars`);
-                } catch (e) {
-                    console.log(`❌ Meta strategy failed: ${e.message}`);
-                }
-            }
-
-            // CLEANUP
-            if (description !== '-') {
-                description = description.replace(/\s+/g, ' ').trim();
-                if (description.length > 500) {
-                    description = description.substring(0, 500) + '...';
-                }
-                description = description
-                    .replace(/eBay International Shipping/g, '')
-                    .replace(/Shop with confidence/g, '')
-                    .replace(/Includes detailed tracking/g, '')
-                    .replace(/Learn more/g, '')
-                    .trim();
-            }
-
-            console.log(`📝 Final description: ${description.length} chars`);
-            console.log(`📋 Item specifics: ${Object.keys(specifics).length} items`);
+            // Gabungkan teks terstruktur
+            let combinedText = `Product Description (from iframe): ${iframeDescriptionText.substring(0, 3000)} ` + 
+                                $('#mainContent').text() + " " + $('div[data-testid="x-item-specifics-readonly"]').text();
             
-            return {
-                product_description: description,
-                item_specifics: specifics
-            };
+            // Membersihkan teks mentah
+            const cleanedText = combinedText
+                .replace(/\s+/g, ' ') 
+                .replace(`//g`, "")
+                .trim();
             
+            console.log(`[Mode AI] Teks mentah halaman diambil (${cleanedText.length} karakter).`);
+            
+            // Batasi jumlah karakter
+            return { text: cleanedText.substring(0, 5000), imageUrl: imageUrl || '-' };
+
         } catch (error) {
-            console.error('❌ Detail scraping error:', error.message);
-            if (pageInstance) {
-                await Utils.saveScreenshot(pageInstance, 'ebay_DETAIL_FAILURE_screenshot.png');
+            console.error('❌ Gagal mengambil Teks Halaman Detail:', error.message);
+            
+            // ✅ FINAL FIX: Jika terjadi timeout navigasi (error 60 detik), paksa restart browser.
+            if (error.message.includes("Navigation timeout")) {
+                 console.error("⚠️ CRITICAL ERROR: Navigation timeout occurred. Forcing full browser restart.");
+                 await BrowserService.closeBrowser(); 
             }
-            return { product_description: '-', item_specifics: {} };
+
+            // Kembalikan objek error
+            return { text: "Teks tidak tersedia - Halaman gagal dimuat.", imageUrl: '-' };
         } finally {
             if (pageInstance) {
                 await pageInstance.close();
